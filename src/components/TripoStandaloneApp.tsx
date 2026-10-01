@@ -384,14 +384,41 @@ export const TripoStandaloneApp: React.FC = () => {
 
   // Convert via URL input
   const handleConvertUrlSubmit = async () => {
-    if (!inputUrl.trim()) return;
+    const rawUrl = inputUrl.trim();
+    if (!rawUrl) return;
+
+    // Detect if user pasted a webpage link like studio.tripo3d.ai/3d-model/...
+    if (rawUrl.includes('studio.tripo3d.ai/3d-model/')) {
+      setErrorMsg(
+        '⚠️ 入力されたのはTripo3Dの「Web画面のURL（ページリンク）」です。3Dデータを変換するには、Tripo3Dでダウンロードした「..._meshopt.glb」ファイルを上の枠にドラッグ＆ドロップするか、F12キーの開発者ツール（Network）で取得した「tripo-data..._meshopt.glb」の直接URLを貼り付けてください。'
+      );
+      return;
+    }
+
     setIsLoading(true);
     setErrorMsg(null);
-    setProgressText('Tripo3Dサーバーからモデルを受信中...');
+    setProgressText('サーバープロキシ経由でモデルを受信中（CORS制限回避）...');
 
     try {
-      const res = await fetch(inputUrl.trim());
-      if (!res.ok) throw new Error(`ダウンロードに失敗しました (HTTP ${res.status})。URLの有効期限が切れている可能性があります。`);
+      // First try proxy route to bypass browser CORS restrictions
+      let res: Response;
+      try {
+        const proxyUrl = `/api/proxy-model?url=${encodeURIComponent(rawUrl)}`;
+        res = await fetch(proxyUrl);
+      } catch (proxyErr) {
+        // Fallback to direct fetch
+        res = await fetch(rawUrl);
+      }
+
+      if (!res.ok) {
+        // If proxy failed, try direct fetch
+        res = await fetch(rawUrl);
+      }
+
+      if (!res.ok) {
+        throw new Error(`ダウンロードに失敗しました (HTTP ${res.status})。URLの有効期限が切れている可能性があります。`);
+      }
+
       const buf = await res.arrayBuffer();
       await processGlbFileBuffer(buf, 'tripo_model_converted');
     } catch (err: any) {
@@ -399,7 +426,7 @@ export const TripoStandaloneApp: React.FC = () => {
       setIsLoading(false);
       setProgressText('');
       setErrorMsg(
-        'ブラウザの直接通信がブロックされました（CORS制限または期限切れ）。お手数ですがPCのダウンロードフォルダにある「..._meshopt.glb」ファイルを下の枠にドロップしてください！'
+        '通信がブロックされました。最も確実で速い方法は、PCのダウンロードフォルダにある「..._meshopt.glb」ファイルを上の点線枠にドラッグ＆ドロップすることです（0秒で変換されます）！'
       );
     }
   };
@@ -671,6 +698,25 @@ export const TripoStandaloneApp: React.FC = () => {
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 font-mono focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition resize-none"
               />
 
+              {/* Quick Preset Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-slate-400">URLクイック挿入:</span>
+                <button
+                  type="button"
+                  onClick={() => setInputUrl(defaultMonsterUrl)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer"
+                >
+                  モンスター
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInputUrl('https://tripo-data.rg1.data.tripo3d.com/tripo-studio/20260713/bf6fc197-ea3f-4aed-bd34-073f446f57d0/tripo_base_model_bf6fc197-ea3f-4aed-bd34-073f446f57d0_meshopt.glb?Key-Pair-Id=K1676C64NMVM2J&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly90cmlwby1kYXRhLnJnMS5kYXRhLnRyaXBvM2QuY29tL3RyaXBvLXN0dWRpby8yMDI2MDcxMy9iZjZmYzE5Ny1lYTNmLTRhZWQtYmQzNC0wNzNmNDQ2ZjU3ZDAvdHJpcG9fYmFzZV9tb2RlbF9iZjZmYzE5Ny1lYTNmLTRhZWQtYmQzNC0wNzNmNDQ2ZjU3ZDBfbWVzaG9wdC5nbGIiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3OTA5ODU2MDB9fX1dfQ__&Signature=K-w-7b8JY91yXyGBY7sBEgG12i8Ry-itjXB6Gjn-PPlJeQDQmKMcwL~yry1gmkTA78FOvEQVa30QO3evhyVawv133z2PWBQf0TPxurUwcroUJ6CSFTyXUlTyKZRCSrSZYSlY3KmnSbz7GLjREfcoKwbv~Px6LWWlqGIpde7~E7tj0BlIwpNHYfsSfsuML~x8Rzx5vi5UWeke~GIIf6MZczb6XGvNH~0yZifKMuZyngSnTeel3CSoBZrYWzhv9nGW7ERd4FbCPPb9EBno401AQ5aLu3dMk4UEUf6YCnHhp6z7kDQez3-sLNvAr0-lsHcSfiATs~D7EjjhfVu5dImTzw__')}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer"
+                >
+                  新規ベースモデル (07/13)
+                </button>
+              </div>
+
               <div className="flex gap-2">
                 <button
                   onClick={handleConvertUrlSubmit}
@@ -678,7 +724,7 @@ export const TripoStandaloneApp: React.FC = () => {
                   className="flex-1 py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-md transition disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                  <span>URLから取得・変換</span>
+                  <span>URLから取得・変換（CORSプロキシ対応）</span>
                 </button>
               </div>
             </div>
