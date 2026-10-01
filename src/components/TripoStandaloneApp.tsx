@@ -26,7 +26,8 @@ import {
   ChevronDown,
   ChevronUp,
   HelpCircle,
-  Check
+  Check,
+  Copy
 } from 'lucide-react';
 
 interface ModelMetrics {
@@ -71,6 +72,9 @@ export const TripoStandaloneApp: React.FC = () => {
   const [filamentColor, setFilamentColor] = useState<string>('#10b981'); // Bambu green
   const [targetHeightMm, setTargetHeightMm] = useState<number>(70);
   const [showFaq, setShowFaq] = useState<boolean>(false);
+  const [copiedBookmarklet, setCopiedBookmarklet] = useState<boolean>(false);
+
+  const bookmarkletCode = `javascript:(function(){try{var r=performance.getEntriesByType('resource').filter(function(e){return e.name.indexOf('_meshopt.glb')!==-1||(e.name.indexOf('tripo')!==-1&&e.name.indexOf('.glb')!==-1);});if(r.length>0){var u=r[r.length-1].name;location.href='https://tripo3-d-stl.vercel.app/?url='+encodeURIComponent(u);}else{alert('3Dモデルデータが見つかりませんでした。モデルを指で少し回転させてから再実行してください。');}}catch(e){alert('エラー:'+e.message);}})();`;
 
   // Three.js refs
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -151,8 +155,16 @@ export const TripoStandaloneApp: React.FC = () => {
     };
     animate();
 
-    // Load default solid model
-    loadModelFromUrl('/downloads/cartoon_monster_solid.glb', 'cartoon_monster_solid');
+    // Check if ?url= query parameter exists (from mobile bookmarklet or direct link)
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialQueryUrl = urlParams.get('url');
+    if (initialQueryUrl) {
+      setInputUrl(initialQueryUrl);
+      loadModelFromUrl(initialQueryUrl, 'tripo_mobile_model');
+    } else {
+      // Load default solid model
+      loadModelFromUrl('/downloads/cartoon_monster_solid.glb', 'cartoon_monster_solid');
+    }
 
     const handleResize = () => {
       if (!container || !renderer) return;
@@ -288,7 +300,7 @@ export const TripoStandaloneApp: React.FC = () => {
   // Load from URL
   const loadModelFromUrl = async (url: string, name: string) => {
     setIsLoading(true);
-    setProgressText('WebAssemblyでMeshopt圧縮を解凍中...');
+    setProgressText('3Dモデルデータを受信中...');
     setErrorMsg(null);
 
     try {
@@ -296,8 +308,16 @@ export const TripoStandaloneApp: React.FC = () => {
       const loader = new GLTFLoader();
       loader.setMeshoptDecoder(MeshoptDecoder);
 
+      // Determine fetch URL (use proxy for external URLs to bypass CORS)
+      let fetchUrl = url;
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        if (!url.startsWith(window.location.origin)) {
+          fetchUrl = `/api/proxy-model?url=${encodeURIComponent(url)}`;
+        }
+      }
+
       loader.load(
-        url,
+        fetchUrl,
         (gltf) => {
           setupGltfInViewer(gltf.scene, name);
           setIsLoading(false);
@@ -309,11 +329,18 @@ export const TripoStandaloneApp: React.FC = () => {
             setProgressText(`ダウンロード中... ${pct}%`);
           }
         },
-        (err) => {
-          console.error(err);
-          setIsLoading(false);
-          setProgressText('');
-          setErrorMsg('URLからのモデル取得に失敗しました。PCのファイルを直接ドロップしてください。');
+        async (err) => {
+          console.warn('Loader error with proxy, fallback to direct fetch buffer...', err);
+          try {
+            const res = await fetch(url);
+            const buf = await res.arrayBuffer();
+            await processGlbFileBuffer(buf, name);
+          } catch (e2: any) {
+            console.error(e2);
+            setIsLoading(false);
+            setProgressText('');
+            setErrorMsg('URLからのモデル取得に失敗しました。');
+          }
         }
       );
     } catch (err: any) {
@@ -652,19 +679,19 @@ export const TripoStandaloneApp: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              PCの「ダウンロード」フォルダにある <code className="text-emerald-300 font-mono">_meshopt.glb</code> を放り込むだけで、ブラウザ内で即座に穴なしSTLに変換されます！
+              スマホやPCの「ダウンロード」にある <code className="text-emerald-300 font-mono">_meshopt.glb</code> を選ぶだけで、ブラウザ内で即座に穴なし水密STLに変換されます！
             </p>
 
             <div
               onDragOver={(e) => e.preventDefault()}
               onDrop={handleDrop}
               onClick={() => document.getElementById('standalone-file-input')?.click()}
-              className="border-2 border-dashed border-slate-700 hover:border-emerald-500/60 bg-slate-950/60 rounded-2xl p-6 text-center space-y-3 transition cursor-pointer group"
+              className="border-2 border-dashed border-slate-700 hover:border-emerald-500/60 bg-slate-950/60 rounded-2xl p-6 text-center space-y-3 transition cursor-pointer group active:scale-[0.99]"
             >
               <input
                 id="standalone-file-input"
                 type="file"
-                accept=".glb,.gltf"
+                accept=".glb,.gltf,model/gltf-binary,model/gltf+json,application/octet-stream,*"
                 className="hidden"
                 onChange={handleFileChange}
               />
@@ -672,8 +699,11 @@ export const TripoStandaloneApp: React.FC = () => {
                 <Upload className="w-7 h-7 text-slate-400 group-hover:text-emerald-400 transition" />
               </div>
               <div>
-                <p className="text-sm font-bold text-white">ここにGLBファイルをドラッグ＆ドロップ</p>
-                <p className="text-xs text-slate-500 mt-1">またはクリックしてファイルを選択</p>
+                <p className="text-sm font-bold text-white">📱 タップしてスマホのファイルから選択</p>
+                <p className="text-xs text-slate-400 mt-1">（PCはドラッグ＆ドロップ対応）</p>
+                <span className="inline-block mt-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-[11px] font-medium border border-emerald-500/20">
+                  Tripo3Dのダウンロード済みGLBを選ぶだけ！
+                </span>
               </div>
             </div>
           </div>
@@ -735,6 +765,50 @@ export const TripoStandaloneApp: React.FC = () => {
                 <span>{errorMsg}</span>
               </div>
             )}
+          </div>
+
+          {/* Method 3: Mobile Bookmarklet Trick (Bypass Paywall on Android/iPhone) */}
+          <div className="bg-gradient-to-br from-indigo-950/40 to-slate-900 rounded-3xl border border-indigo-500/30 p-6 shadow-xl space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">3</span>
+              <h3 className="font-bold text-white text-base">📱 スマホ裏ワザ：Tripo3Dの課金画面を回避</h3>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Tripo3Dの無料プランでは「輸出」ボタンを押すと有料アップグレード画面が出ますが、<strong>画面に表示されている3Dプレビューデータ（GLB）をスマホから直接吸い出す</strong>ことができます！
+            </p>
+
+            <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2 text-xs text-slate-300">
+              <p className="font-bold text-indigo-300">【使い方はかんたん2ステップ】</p>
+              <ol className="list-decimal list-inside space-y-1 text-slate-400 text-[11px]">
+                <li>下のボタンを押して「自動抽出コード」をコピーする</li>
+                <li>Chromeで適当なページをブックマーク保存し、URL欄に貼り付けて名前を「Tripo変換」にする</li>
+              </ol>
+              <p className="text-[11px] text-slate-400">
+                👉 あとはTripo3Dで3Dモデルを表示したまま、Chromeのアドレスバーに「Tripo」と入力してブックマークをタップするだけで、課金制限なしでこのアプリに転送されます！
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(bookmarkletCode);
+                setCopiedBookmarklet(true);
+                setTimeout(() => setCopiedBookmarklet(false), 3000);
+              }}
+              className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-98"
+            >
+              {copiedBookmarklet ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>コピー完了！ChromeのブックマークURLに貼ってください</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" />
+                  <span>自動抽出コード（ブックマークレット）をコピー</span>
+                </>
+              )}
+            </button>
           </div>
 
           {/* Bambu Studio Slicing Cheat Sheet */}
