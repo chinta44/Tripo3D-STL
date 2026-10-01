@@ -1,0 +1,6 @@
+{
+  "name": "Meshy 3D Agent & 3Dプリント徹底ガイド・PC環境チェッカー",
+  "description": "GitHubのmeshy-dev/meshy-3d-agentの仕組み、無料での3Dプリントデータ出力可否、PC・GPU推奨スペック、完全ローカル生成AIとの比較と3Dプレビュー診断ツール。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
