@@ -19,8 +19,12 @@ const tripoProxyPlugin = (): Plugin => ({
       }
 
       try {
-        const urlObj = new URL(req.url || '', `http://${req.headers.host}`);
-        const targetUrl = urlObj.searchParams.get('url');
+        const fullUrl = req.url || '';
+        const urlParamIndex = fullUrl.indexOf('url=');
+        let targetUrl = '';
+        if (urlParamIndex !== -1) {
+          targetUrl = decodeURIComponent(fullUrl.slice(urlParamIndex + 4));
+        }
 
         if (!targetUrl) {
           res.statusCode = 400;
