@@ -58,6 +58,36 @@ const tripoProxyPlugin = (): Plugin => ({
         res.end(JSON.stringify({ error: err.message || 'Proxy server error' }));
       }
     });
+
+    server.middlewares.use('/api/download-stl', async (req, res) => {
+      try {
+        const fs = await import('fs');
+        const candidateFiles = [
+          path.resolve(__dirname, 'public/cartoon_character_solid_70mm.stl'),
+          path.resolve(__dirname, 'public/tripo_70mm_ultra.stl'),
+          path.resolve(__dirname, 'public/downloads/cartoon_character_solid.stl')
+        ];
+
+        let targetFile = candidateFiles.find(f => fs.existsSync(f));
+
+        if (!targetFile) {
+          res.statusCode = 404;
+          res.end('File not found');
+          return;
+        }
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', 'attachment; filename="tripo_character_70mm_watertight.stl"');
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        const stream = fs.createReadStream(targetFile, { highWaterMark: 64 * 1024 });
+        stream.pipe(res);
+      } catch (err: any) {
+        res.statusCode = 500;
+        res.end(err.message || 'Server download error');
+      }
+    });
   }
 });
 

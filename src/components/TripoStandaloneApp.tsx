@@ -271,6 +271,7 @@ export const TripoStandaloneApp: React.FC = () => {
 
     // Export STL in-memory using WebAssembly / Three.js
     try {
+      gltfScene.updateMatrixWorld(true);
       const exporter = new STLExporter();
       const stlData = exporter.parse(gltfScene, { binary: true });
       const blob = new Blob([stlData], { type: 'application/octet-stream' });
@@ -470,10 +471,10 @@ export const TripoStandaloneApp: React.FC = () => {
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     } else {
-      // Fallback pre-converted file
+      // Fallback pre-converted file (streamed chunked 70mm solid STL)
       const a = document.createElement('a');
-      a.href = '/downloads/cartoon_monster_solid.stl';
-      a.download = 'cartoon_monster_solid.stl';
+      a.href = '/api/download-stl';
+      a.download = 'tripo_character_70mm_watertight.stl';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
