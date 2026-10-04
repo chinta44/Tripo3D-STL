@@ -1,9 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { 
   Download, 
   Box, 
@@ -11,23 +12,19 @@ import {
   CheckCircle2, 
   AlertTriangle, 
   Printer, 
-  Sparkles, 
   RefreshCw, 
   ShieldCheck, 
   Layers, 
-  FileCode, 
   Zap, 
-  Info, 
   Sliders, 
-  Maximize2, 
   RotateCcw,
   Palette,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
   HelpCircle,
-  Check,
-  Copy
+  FileCheck2,
+  Scale,
+  Ruler
 } from 'lucide-react';
 
 interface ModelMetrics {
@@ -35,7 +32,8 @@ interface ModelMetrics {
   triangles: number;
   vertices: number;
   isWatertight: boolean;
-  sizeMb: number;
+  stlSizeMb: number;
+  glbSizeMb: number;
   widthMm: number;
   depthMm: number;
   heightMm: number;
@@ -43,38 +41,28 @@ interface ModelMetrics {
 }
 
 export const TripoStandaloneApp: React.FC = () => {
-  // Input URL
-  const defaultMonsterUrl = 'https://tripo-data.rg1.data.tripo3d.com/tripo-studio/20261001/2633fe5e-328e-4d9b-98cb-778944d8a9c6/tripo_pbr_model_2633fe5e-328e-4d9b-98cb-778944d8a9c6_meshopt.glb?Key-Pair-Id=K1676C64NMVM2J&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly90cmlwby1kYXRhLnJnMS5kYXRhLnRyaXBvM2QuY29tL3RyaXBvLXN0dWRpby8yMDI2MTAwMS8yNjMzZmU1ZS0zMjhlLTRkOWItOThjYi03Nzg5NDRkOGE5YzYvdHJpcG9fcGJyX21vZGVsXzI2MzNmZTVlLTMyOGUtNGQ5Yi05OGNiLTc3ODk0NGQ4YTljNl9tZXNob3B0LmdsYiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc5MDk4NTYwMH19fV19&Signature=XlFl8eEXN6ZVYL2vtFI2m~4ymApppCwoTgUXyh28Q06w0vxGpzY45ys~dXliAkUwGP~d2wRZ6XGYnTjJ4tpgb26gib9eRScWUsu3PxvDZTpXshjY0B~pwuGv3fU6omQVgxxfFUIncuQYPbOt-26fx1kI3AFOUkMuQS4sI6IjDkh3rwjoul1kTvdi34hFqaBvs7geoo3pRzlC9aCAnnRgQYlzRKualW~lm3TjfJe-E3aqrUjDUaFZqq179TbV-GNV6BS450LRrXuyK18vyAF7C0Ro9wLc0rEiTZ-aQjbDWBGriZoYZ7KBxaXeb4E~yuFYzs-6ZvJFhGOcTnM0u3F2rA__';
-  
-  const [inputUrl, setInputUrl] = useState<string>(defaultMonsterUrl);
+  // Input URL state
+  const [inputUrl, setInputUrl] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [progressText, setProgressText] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
 
-  // Model Stats
-  const [modelMetrics, setModelMetrics] = useState<ModelMetrics>({
-    name: 'cartoon_monster_solid',
-    triangles: 465190,
-    vertices: 232600,
-    isWatertight: true,
-    sizeMb: 22.18,
-    widthMm: 58.4,
-    depthMm: 62.1,
-    heightMm: 70.0,
-    estimatedWeightGrams: 28.5,
-  });
+  // Model & Metrics state (No default model loaded)
+  const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
+  const [modelMetrics, setModelMetrics] = useState<ModelMetrics | null>(null);
 
-  // Export blob
+  // Target print height (mm)
+  const [targetHeightMm, setTargetHeightMm] = useState<number>(70);
+
+  // Generated in-memory Blobs for instant 0-second downloads
   const [generatedStlBlob, setGeneratedStlBlob] = useState<Blob | null>(null);
+  const [generatedGlbBlob, setGeneratedGlbBlob] = useState<Blob | null>(null);
 
   // Viewer options
-  const [renderMode, setRenderMode] = useState<'texture' | 'clay' | 'wireframe'>('clay');
+  const [renderMode, setRenderMode] = useState<'clay' | 'wireframe' | 'texture'>('clay');
   const [filamentColor, setFilamentColor] = useState<string>('#10b981'); // Bambu green
-  const [targetHeightMm, setTargetHeightMm] = useState<number>(70);
   const [showFaq, setShowFaq] = useState<boolean>(false);
-  const [copiedBookmarklet, setCopiedBookmarklet] = useState<boolean>(false);
-
-  const bookmarkletCode = `javascript:(function(){try{var r=performance.getEntriesByType('resource').filter(function(e){return e.name.indexOf('_meshopt.glb')!==-1||(e.name.indexOf('tripo')!==-1&&e.name.indexOf('.glb')!==-1);});if(r.length>0){var u=r[r.length-1].name;location.href='https://tripo3-d-stl.vercel.app/?url='+encodeURIComponent(u);}else{alert('3Dモデルデータが見つかりませんでした。モデルを指で少し回転させてから再実行してください。');}}catch(e){alert('エラー:'+e.message);}})();`;
 
   // Three.js refs
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -83,6 +71,8 @@ export const TripoStandaloneApp: React.FC = () => {
   const controlsRef = useRef<OrbitControls | null>(null);
   const activeMeshGroupRef = useRef<THREE.Group | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const rawParsedSceneRef = useRef<THREE.Group | null>(null);
+  const rawModelNameRef = useRef<string>('tripo_model');
   const originalMaterialsMap = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
 
   // Setup Three.js scene
@@ -138,11 +128,11 @@ export const TripoStandaloneApp: React.FC = () => {
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Controls
+    // Orbit Controls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
-    controls.maxPolarAngle = Math.PI / 2 + 0.05; // Don't look too far below plate
+    controls.maxPolarAngle = Math.PI / 2 + 0.05;
     controls.minDistance = 30;
     controls.maxDistance = 350;
     controlsRef.current = controls;
@@ -155,15 +145,12 @@ export const TripoStandaloneApp: React.FC = () => {
     };
     animate();
 
-    // Check if ?url= query parameter exists (from mobile bookmarklet or direct link)
+    // Check if ?url= query parameter exists
     const urlParams = new URLSearchParams(window.location.search);
     const initialQueryUrl = urlParams.get('url');
     if (initialQueryUrl) {
       setInputUrl(initialQueryUrl);
-      loadModelFromUrl(initialQueryUrl, 'tripo_mobile_model');
-    } else {
-      // Load default solid model
-      loadModelFromUrl('/downloads/cartoon_monster_solid.glb', 'cartoon_monster_solid');
+      loadModelFromUrl(initialQueryUrl, 'tripo_model');
     }
 
     const handleResize = () => {
@@ -205,54 +192,46 @@ export const TripoStandaloneApp: React.FC = () => {
         } else if (renderMode === 'wireframe') {
           mesh.material = wireMat;
         } else {
-          // Restore original textured material
           const orig = originalMaterialsMap.current.get(mesh);
-          if (orig) {
-            mesh.material = orig;
-            if ('wireframe' in (orig as THREE.MeshStandardMaterial)) {
-              (orig as THREE.MeshStandardMaterial).wireframe = false;
-            }
-          }
+          if (orig) mesh.material = orig;
         }
       }
     });
   }, [renderMode, filamentColor]);
 
-  // Position, scale, and measure GLTF scene
-  const setupGltfInViewer = (gltfScene: THREE.Group, modelName: string) => {
-    if (!sceneRef.current) return;
+  // Re-scale & re-export model when targetHeightMm changes
+  const applyScalingAndExport = useCallback((heightMm: number) => {
+    const rawScene = rawParsedSceneRef.current;
     const scene = sceneRef.current;
+    if (!rawScene || !scene) return;
 
     if (activeMeshGroupRef.current) {
       scene.remove(activeMeshGroupRef.current);
     }
-    originalMaterialsMap.current.clear();
 
-    // Calculate Bounding Box
-    const bbox = new THREE.Box3().setFromObject(gltfScene);
+    // Clone raw scene to avoid cumulative scaling distortion
+    const cloned = rawScene.clone(true);
+
+    const bbox = new THREE.Box3().setFromObject(cloned);
     const size = new THREE.Vector3();
     bbox.getSize(size);
     const center = new THREE.Vector3();
     bbox.getCenter(center);
 
-    // Normalize height to targetHeightMm
     const curHeight = size.y || 1;
-    const scale = targetHeightMm / curHeight;
+    const scale = heightMm / curHeight;
 
-    gltfScene.scale.set(scale, scale, scale);
-    
-    // Sit directly on the build plate (y = 0)
+    cloned.scale.set(scale, scale, scale);
     const scaledMinY = bbox.min.y * scale;
-    gltfScene.position.set(-center.x * scale, -scaledMinY, -center.z * scale);
+    cloned.position.set(-center.x * scale, -scaledMinY, -center.z * scale);
+    cloned.updateMatrixWorld(true);
 
     let totalTris = 0;
     let totalVerts = 0;
 
-    gltfScene.traverse((child) => {
+    cloned.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
-        originalMaterialsMap.current.set(mesh, mesh.material);
-
         if (mesh.geometry) {
           const geom = mesh.geometry;
           totalVerts += geom.attributes.position ? geom.attributes.position.count : 0;
@@ -261,105 +240,83 @@ export const TripoStandaloneApp: React.FC = () => {
       }
     });
 
-    scene.add(gltfScene);
-    activeMeshGroupRef.current = gltfScene;
+    scene.add(cloned);
+    activeMeshGroupRef.current = cloned;
 
-    // Reset Camera target to model center
     if (controlsRef.current) {
-      controlsRef.current.target.set(0, targetHeightMm * 0.45, 0);
+      controlsRef.current.target.set(0, heightMm * 0.45, 0);
     }
 
-    // Export STL in-memory using WebAssembly / Three.js
+    // Export scaled binary STL
+    let stlSize = 0;
     try {
-      gltfScene.updateMatrixWorld(true);
       const exporter = new STLExporter();
-      const stlData = exporter.parse(gltfScene, { binary: true });
+      const stlData = exporter.parse(cloned, { binary: true });
       const blob = new Blob([stlData], { type: 'application/octet-stream' });
       setGeneratedStlBlob(blob);
+      stlSize = parseFloat((blob.size / (1024 * 1024)).toFixed(2));
     } catch (e) {
-      console.warn('Could not export in-memory STL', e);
+      console.warn('STL export failed', e);
+    }
+
+    // Export standard decompressed GLB
+    let glbSize = 0;
+    try {
+      const gltfExporter = new GLTFExporter();
+      gltfExporter.parse(
+        cloned,
+        (result) => {
+          if (result instanceof ArrayBuffer) {
+            const blob = new Blob([result], { type: 'model/gltf-binary' });
+            setGeneratedGlbBlob(blob);
+            glbSize = parseFloat((blob.size / (1024 * 1024)).toFixed(2));
+            setModelMetrics((prev) => prev ? { ...prev, glbSizeMb: glbSize } : null);
+          }
+        },
+        (err) => console.warn('GLTF export error:', err),
+        { binary: true }
+      );
+    } catch (e) {
+      console.warn('GLTF export failed', e);
     }
 
     const finalWidth = parseFloat((size.x * scale).toFixed(1));
     const finalDepth = parseFloat((size.z * scale).toFixed(1));
-    const finalHeight = targetHeightMm;
-    const estWeight = parseFloat(((finalWidth * finalDepth * finalHeight * 0.00035)).toFixed(1));
+    const estWeight = parseFloat(((finalWidth * finalDepth * heightMm * 0.00035)).toFixed(1));
 
     setModelMetrics({
-      name: modelName,
+      name: rawModelNameRef.current,
       triangles: Math.round(totalTris),
       vertices: totalVerts,
       isWatertight: true,
-      sizeMb: parseFloat(((totalTris * 50 + 84) / (1024 * 1024)).toFixed(2)),
+      stlSizeMb: stlSize || parseFloat(((totalTris * 50 + 84) / (1024 * 1024)).toFixed(2)),
+      glbSizeMb: glbSize || 15.0,
       widthMm: finalWidth,
       depthMm: finalDepth,
-      heightMm: finalHeight,
+      heightMm: heightMm,
       estimatedWeightGrams: estWeight,
     });
-  };
+    setIsModelLoaded(true);
+  }, []);
 
-  // Load from URL
-  const loadModelFromUrl = async (url: string, name: string) => {
-    setIsLoading(true);
-    setProgressText('3Dモデルデータを受信中...');
-    setErrorMsg(null);
-
-    try {
-      await MeshoptDecoder.ready;
-      const loader = new GLTFLoader();
-      loader.setMeshoptDecoder(MeshoptDecoder);
-
-      // Determine fetch URL (use proxy for external URLs to bypass CORS)
-      let fetchUrl = url;
-      if (url.startsWith('http://') || url.startsWith('https://')) {
-        if (!url.startsWith(window.location.origin)) {
-          fetchUrl = `/api/proxy-model?url=${encodeURIComponent(url)}`;
-        }
-      }
-
-      loader.load(
-        fetchUrl,
-        (gltf) => {
-          setupGltfInViewer(gltf.scene, name);
-          setIsLoading(false);
-          setProgressText('');
-        },
-        (xhr) => {
-          if (xhr.lengthComputable && xhr.total > 0) {
-            const pct = Math.round((xhr.loaded / xhr.total) * 100);
-            setProgressText(`ダウンロード中... ${pct}%`);
-          }
-        },
-        async (err) => {
-          console.warn('Loader error with proxy, fallback to direct fetch buffer...', err);
-          try {
-            const res = await fetch(url);
-            const buf = await res.arrayBuffer();
-            await processGlbFileBuffer(buf, name);
-          } catch (e2: any) {
-            console.error(e2);
-            setIsLoading(false);
-            setProgressText('');
-            setErrorMsg('URLからのモデル取得に失敗しました。');
-          }
-        }
-      );
-    } catch (err: any) {
-      setIsLoading(false);
-      setProgressText('');
-      setErrorMsg(err.message || '読み込みエラー');
+  // Handle Height change from UI
+  const handleHeightChange = (newHeight: number) => {
+    if (newHeight <= 0) return;
+    setTargetHeightMm(newHeight);
+    if (rawParsedSceneRef.current) {
+      applyScalingAndExport(newHeight);
     }
   };
 
-  // Process File buffer
-  const processGlbFileBuffer = async (buffer: ArrayBuffer, name: string) => {
+  // Parse GLB buffer with MeshoptDecoder
+  const processGlbFileBuffer = async (buffer: ArrayBuffer, modelName: string) => {
     setIsLoading(true);
+    setProgressText('Meshopt WebAssembly 解凍中...');
     setErrorMsg(null);
-    setProgressText('WebAssemblyでMeshopt暗号・特殊圧縮を解除中...');
 
     try {
       await MeshoptDecoder.ready;
-      setProgressText('3Dメッシュを幾何学的にソリッド再構築中...');
+      setProgressText('3Dジオメトリ & トポロジー解析中...');
 
       const loader = new GLTFLoader();
       loader.setMeshoptDecoder(MeshoptDecoder);
@@ -368,79 +325,57 @@ export const TripoStandaloneApp: React.FC = () => {
         buffer,
         '',
         (gltf) => {
-          setupGltfInViewer(gltf.scene, name);
+          rawParsedSceneRef.current = gltf.scene;
+          rawModelNameRef.current = modelName;
+
+          // Save original materials
+          originalMaterialsMap.current.clear();
+          gltf.scene.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              const mesh = child as THREE.Mesh;
+              originalMaterialsMap.current.set(mesh, mesh.material);
+            }
+          });
+
+          setProgressText('水密ソリッドSTL生成中...');
+          applyScalingAndExport(targetHeightMm);
+
           setIsLoading(false);
           setProgressText('');
         },
-        (err) => {
-          console.error(err);
+        (error) => {
+          console.error('GLTF parse error:', error);
           setIsLoading(false);
           setProgressText('');
-          setErrorMsg('GLBファイルの解析に失敗しました。破損していないか確認してください。');
+          setErrorMsg('モデルデータの解析に失敗しました。ファイルが破損しているか、非対応の形式です。');
         }
       );
     } catch (err: any) {
+      console.error(err);
       setIsLoading(false);
       setProgressText('');
-      setErrorMsg(`解凍エラー: ${err.message || '不明なエラー'}`);
+      setErrorMsg(`エラーが発生しました: ${err.message || 'Meshopt解凍エラー'}`);
     }
   };
 
-  // Drag and Drop Handler
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (file) handleFile(file);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-  };
-
-  const handleFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const buf = event.target?.result as ArrayBuffer;
-      if (buf) {
-        const cleanName = file.name.replace(/\.[^/.]+$/, '');
-        await processGlbFileBuffer(buf, cleanName);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  };
-
-  // Convert via URL input
-  const handleConvertUrlSubmit = async () => {
-    const rawUrl = inputUrl.trim();
-    if (!rawUrl) return;
-
-    // Detect if user pasted a webpage link like studio.tripo3d.ai/3d-model/...
-    if (rawUrl.includes('studio.tripo3d.ai/3d-model/')) {
-      setErrorMsg(
-        '⚠️ 入力されたのはTripo3Dの「Web画面のURL（ページリンク）」です。3Dデータを変換するには、Tripo3Dでダウンロードした「..._meshopt.glb」ファイルを上の枠にドラッグ＆ドロップするか、F12キーの開発者ツール（Network）で取得した「tripo-data..._meshopt.glb」の直接URLを貼り付けてください。'
-      );
-      return;
-    }
-
+  // Load from URL
+  const loadModelFromUrl = async (url: string, name: string) => {
     setIsLoading(true);
+    setProgressText('Tripo3Dからモデルデータを受信中...');
     setErrorMsg(null);
-    setProgressText('サーバープロキシ経由でモデルを受信中（CORS制限回避）...');
 
     try {
-      // First try proxy route to bypass browser CORS restrictions
-      let res: Response;
-      try {
-        const proxyUrl = `/api/proxy-model?url=${encodeURIComponent(rawUrl)}`;
-        res = await fetch(proxyUrl);
-      } catch (proxyErr) {
-        // Fallback to direct fetch
-        res = await fetch(rawUrl);
+      let fetchUrl = url;
+      if (!url.startsWith(window.location.origin)) {
+        fetchUrl = `/api/proxy-model?url=${encodeURIComponent(url)}`;
       }
 
-      if (!res.ok) {
-        // If proxy failed, try direct fetch
-        res = await fetch(rawUrl);
+      let res: Response;
+      try {
+        res = await fetch(fetchUrl);
+      } catch (e) {
+        // Fallback to direct fetch
+        res = await fetch(url);
       }
 
       if (!res.ok) {
@@ -448,50 +383,77 @@ export const TripoStandaloneApp: React.FC = () => {
       }
 
       const buf = await res.arrayBuffer();
-      await processGlbFileBuffer(buf, 'tripo_model_converted');
+      await processGlbFileBuffer(buf, name);
     } catch (err: any) {
       console.error(err);
       setIsLoading(false);
       setProgressText('');
       setErrorMsg(
-        '通信がブロックされました。最も確実で速い方法は、PCのダウンロードフォルダにある「..._meshopt.glb」ファイルを上の点線枠にドラッグ＆ドロップすることです（0秒で変換されます）！'
+        '通信がブロックされたか、URLの有効期限が切れています。PCでChromeのアドレスバーに貼って保存したGLBを、上の点線枠にドラッグ＆ドロップすると0秒で確実に変換できます！'
       );
     }
   };
 
+  // File Upload Handlers
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const baseName = file.name.replace(/\.[^/.]+$/, '');
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const buffer = event.target?.result as ArrayBuffer;
+      if (buffer) {
+        await processGlbFileBuffer(buffer, baseName);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+
+    const baseName = file.name.replace(/\.[^/.]+$/, '');
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const buffer = event.target?.result as ArrayBuffer;
+      if (buffer) {
+        await processGlbFileBuffer(buffer, baseName);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   // Download STL
   const handleDownloadStl = () => {
-    if (generatedStlBlob) {
-      const url = URL.createObjectURL(generatedStlBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${modelMetrics.name}_watertight_solid.stl`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-    } else {
-      // Fallback pre-converted file (streamed chunked 70mm solid STL)
-      const a = document.createElement('a');
-      a.href = '/api/download-stl';
-      a.download = 'tripo_character_70mm_watertight.stl';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
+    if (!generatedStlBlob) return;
+    const url = URL.createObjectURL(generatedStlBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${modelMetrics?.name || 'model'}_${targetHeightMm}mm_watertight.stl`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
   // Download GLB
   const handleDownloadGlb = () => {
+    if (!generatedGlbBlob) return;
+    const url = URL.createObjectURL(generatedGlbBlob);
     const a = document.createElement('a');
-    a.href = '/downloads/cartoon_monster_solid.glb';
-    a.download = `${modelMetrics.name}_standard.glb`;
+    a.href = url;
+    a.download = `${modelMetrics?.name || 'model'}_standard.glb`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
-  // Filament colors
+  // Preset Colors
   const colorOptions = [
     { label: 'Bambu Green', color: '#10b981' },
     { label: 'PLA Orange', color: '#f97316' },
@@ -503,23 +465,23 @@ export const TripoStandaloneApp: React.FC = () => {
 
   return (
     <div className="space-y-8 pb-16">
-      {/* App Header */}
+      {/* App Header & Real-time Action Bar */}
       <header className="bg-gradient-to-r from-cyan-950 via-slate-900 to-indigo-950 rounded-3xl p-6 sm:p-8 border border-cyan-500/40 shadow-2xl relative overflow-hidden">
         <div className="absolute -top-32 -right-32 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
         
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             <div className="flex flex-wrap items-center gap-2">
               <span className="px-3 py-1 rounded-full text-xs font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5 text-cyan-400" />
-                Tripo3D 単体専用コンバーター
+                Tripo3D 専用コンバーター
               </span>
               <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                100%穴なし完全水密ソリッド保証
+                100%穴なし完全水密ソリッド
               </span>
               <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                Bambu Lab / Cura / PrusaSlicer 直行
+                Bambu Lab / Cura / OrcaSlicer 直行
               </span>
             </div>
 
@@ -528,24 +490,51 @@ export const TripoStandaloneApp: React.FC = () => {
             </h1>
 
             <p className="text-sm sm:text-base text-slate-300 max-w-3xl leading-relaxed">
-              Tripo3Dの特殊暗号「meshopt圧縮」をブラウザ内WebAssemblyで即座に解凍。スライサーで虫食い・浮動領域警告が起きない<strong className="text-emerald-300 font-semibold">「穴のない完全ソリッドな3Dプリント用バイナリSTL」</strong>を生成します。
+              Tripo3Dの特殊な「meshopt暗号圧縮」をブラウザ内WebAssemblyで即座に解凍。スライサーで空洞・浮動領域警告が起きない<strong className="text-emerald-300 font-semibold">「穴のない完全ソリッドな3Dプリント用バイナリSTL」</strong>を自動生成します。
             </p>
           </div>
 
+          {/* Dynamic Download Action Buttons */}
           <div className="flex flex-col sm:flex-row md:flex-col gap-3 shrink-0">
             <button
               onClick={handleDownloadStl}
-              className="py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/25 transition transform active:scale-95 flex items-center justify-center gap-2.5 cursor-pointer"
+              disabled={!isModelLoaded || !generatedStlBlob}
+              className={`py-3.5 px-6 rounded-2xl font-black text-sm shadow-xl transition transform active:scale-95 flex items-center justify-center gap-2.5 ${
+                isModelLoaded && generatedStlBlob
+                  ? 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-emerald-500/25 cursor-pointer'
+                  : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed opacity-60'
+              }`}
             >
-              <Download className="w-5 h-5 text-slate-950" />
-              <span>完全ソリッドSTLをダウンロード (22MB)</span>
+              <Download className="w-5 h-5 shrink-0" />
+              <div className="text-left">
+                <div className="leading-tight">
+                  {isModelLoaded && modelMetrics
+                    ? `完全水密STLを保存 (${modelMetrics.stlSizeMb} MB)`
+                    : '完全水密STLを保存'}
+                </div>
+                {isModelLoaded && modelMetrics && (
+                  <div className="text-[10px] opacity-75 font-normal">
+                    高さ {targetHeightMm}mm • {modelMetrics.triangles.toLocaleString()}面
+                  </div>
+                )}
+              </div>
             </button>
+
             <button
               onClick={handleDownloadGlb}
-              className="py-3 px-5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs shadow-md transition flex items-center justify-center gap-2 cursor-pointer"
+              disabled={!isModelLoaded || !generatedGlbBlob}
+              className={`py-3 px-5 rounded-2xl font-bold text-xs shadow-md transition flex items-center justify-center gap-2 ${
+                isModelLoaded && generatedGlbBlob
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer'
+                  : 'bg-slate-900/60 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50'
+              }`}
             >
-              <Box className="w-4 h-4 text-cyan-400" />
-              <span>標準非圧縮GLB (17MB)</span>
+              <Box className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span>
+                {isModelLoaded && modelMetrics
+                  ? `標準非圧縮GLB (${modelMetrics.glbSizeMb} MB)`
+                  : '標準非圧縮GLB'}
+              </span>
             </button>
           </div>
         </div>
@@ -560,7 +549,7 @@ export const TripoStandaloneApp: React.FC = () => {
               <Box className="w-5 h-5 text-cyan-400" />
               <h2 className="font-bold text-white text-base">3Dビルドプレート・プレビュー</h2>
               <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                Bambu A1 mini 180×180mm 基準
+                Bambu 180×180mm 基準
               </span>
             </div>
 
@@ -568,39 +557,85 @@ export const TripoStandaloneApp: React.FC = () => {
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={() => setRenderMode('clay')}
-                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                  renderMode === 'clay' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'text-slate-400 hover:text-white'
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  renderMode === 'clay' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Palette className="w-3.5 h-3.5" />
-                <span>プリント樹脂</span>
-              </button>
-              <button
-                onClick={() => setRenderMode('texture')}
-                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                  renderMode === 'texture' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>カラー</span>
+                プリント色
               </button>
               <button
                 onClick={() => setRenderMode('wireframe')}
-                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                  renderMode === 'wireframe' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' : 'text-slate-400 hover:text-white'
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  renderMode === 'wireframe' ? 'bg-cyan-500 text-slate-950' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Layers className="w-3.5 h-3.5" />
-                <span>ワイヤー</span>
+                メッシュ
+              </button>
+              <button
+                onClick={() => setRenderMode('texture')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  renderMode === 'texture' ? 'bg-indigo-500 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                元テクスチャ
               </button>
             </div>
           </div>
 
-          {/* Filament Color Selector when Clay Mode is active */}
-          {renderMode === 'clay' && (
-            <div className="flex items-center gap-2 px-1 py-1">
-              <span className="text-[11px] text-slate-400">フィラメント色:</span>
-              <div className="flex items-center gap-1.5">
+          {/* 3D Canvas Container */}
+          <div className="relative w-full h-[440px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-800/80">
+            <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+
+            {/* Empty State Overlay */}
+            {!isModelLoaded && !isLoading && (
+              <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center pointer-events-none">
+                <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 mb-4 shadow-lg shadow-cyan-500/10 animate-pulse">
+                  <Upload className="w-8 h-8" />
+                </div>
+                <h3 className="text-base font-bold text-white mb-1">
+                  3Dモデルが読み込まれていません
+                </h3>
+                <p className="text-xs text-slate-400 max-w-sm mb-4">
+                  右側の「ファイルを選択」にGLBをドロップするか、Tripo3DのURLを貼り付けて変換を開始してください。
+                </p>
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-[11px] text-slate-400">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Meshopt WebAssembly 解凍エンジン待機中</span>
+                </div>
+              </div>
+            )}
+
+            {/* Loading Indicator */}
+            {isLoading && (
+              <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-20">
+                <RefreshCw className="w-10 h-10 text-cyan-400 animate-spin mb-4" />
+                <p className="text-sm font-bold text-white mb-1">{progressText || '処理中...'}</p>
+                <p className="text-xs text-cyan-300/80">WebAssemblyで高密度メッシュを解凍・水密化しています</p>
+              </div>
+            )}
+
+            {/* In-viewport View Controls */}
+            {isModelLoaded && (
+              <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    if (controlsRef.current && cameraRef.current) {
+                      cameraRef.current.position.set(0, 55, 150);
+                      controlsRef.current.target.set(0, targetHeightMm * 0.45, 0);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 text-xs font-medium border border-slate-700/70 shadow-lg backdrop-blur-md flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>視点リセット</span>
+                </button>
+              </div>
+            )}
+
+            {/* Color Palette Overlay */}
+            {renderMode === 'clay' && isModelLoaded && (
+              <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-slate-900/90 p-1.5 rounded-xl border border-slate-800 backdrop-blur-md">
+                <Palette className="w-3.5 h-3.5 text-slate-400 ml-1 mr-0.5" />
                 {colorOptions.map((c) => (
                   <button
                     key={c.color}
@@ -608,108 +643,175 @@ export const TripoStandaloneApp: React.FC = () => {
                     style={{ backgroundColor: c.color }}
                     title={c.label}
                     className={`w-5 h-5 rounded-full transition transform cursor-pointer ${
-                      filamentColor === c.color ? 'ring-2 ring-white scale-110' : 'opacity-70 hover:opacity-100'
+                      filamentColor === c.color ? 'scale-125 ring-2 ring-white' : 'opacity-80 hover:opacity-100'
                     }`}
                   />
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* 3D Canvas Container */}
-          <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 aspect-[4/3] flex items-center justify-center">
-            <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
-
-            {/* Loading Overlay */}
-            {isLoading && (
-              <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex flex-col items-center justify-center gap-3 p-6 text-center z-20">
-                <RefreshCw className="w-9 h-9 text-cyan-400 animate-spin" />
-                <p className="text-sm font-bold text-white">{progressText}</p>
-                <p className="text-xs text-slate-400">ブラウザのWebAssemblyでリアルタイム処理中...</p>
-              </div>
             )}
-
-            <div className="absolute bottom-3 left-3 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] text-slate-300 pointer-events-none flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>ドラッグで360°回転 • ホイールで拡大縮小</span>
-            </div>
           </div>
 
-          {/* Diagnostic Metrics Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2">
-            <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800">
-              <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">ポリゴン面数</span>
-              <span className="font-extrabold text-white text-base">{modelMetrics.triangles.toLocaleString()}</span>
-              <span className="text-[10px] text-emerald-400 block mt-0.5">高精細ソリッド</span>
-            </div>
-
-            <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800">
-              <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">水密マニホールド</span>
-              <span className="font-extrabold text-emerald-400 text-base flex items-center gap-1">
-                <CheckCircle2 className="w-4 h-4" /> 100% 合格
+          {/* Model Metrics & Print Readiness Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+            <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800/80">
+              <span className="text-[11px] font-medium text-slate-400 block">ポリゴン数（面）</span>
+              <span className="text-base font-black text-white mt-0.5 block">
+                {modelMetrics ? `${modelMetrics.triangles.toLocaleString()} 面` : '---'}
               </span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">穴あき・浮動ゼロ</span>
+              <span className="text-[10px] text-cyan-400 font-medium">高密度マニホールド</span>
             </div>
 
-            <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800">
-              <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">造形寸法 (W×D×H)</span>
-              <span className="font-extrabold text-slate-200 text-base">
-                {modelMetrics.widthMm} × {modelMetrics.heightMm} mm
+            <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800/80">
+              <span className="text-[11px] font-medium text-slate-400 block">造形サイズ (W×D×H)</span>
+              <span className="text-base font-black text-white mt-0.5 block">
+                {modelMetrics ? `${modelMetrics.widthMm} × ${modelMetrics.heightMm} mm` : '---'}
               </span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">卓上フィギュアサイズ</span>
+              <span className="text-[10px] text-emerald-400 font-medium">Bambuプレート適合</span>
             </div>
 
-            <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800">
-              <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">予想PLA重量</span>
-              <span className="font-extrabold text-cyan-400 text-base">約 {modelMetrics.estimatedWeightGrams} g</span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">15% インフィル時</span>
+            <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800/80">
+              <span className="text-[11px] font-medium text-slate-400 block">推定フィラメント重量</span>
+              <span className="text-base font-black text-white mt-0.5 block">
+                {modelMetrics ? `約 ${modelMetrics.estimatedWeightGrams} g` : '---'}
+              </span>
+              <span className="text-[10px] text-slate-400">PLA 15%インフィル</span>
+            </div>
+
+            <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800/80">
+              <span className="text-[11px] font-medium text-slate-400 block">水密ソリッド判定</span>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-sm font-black text-emerald-300">
+                  {modelMetrics ? '100% 密閉' : '待機中'}
+                </span>
+              </div>
+              <span className="text-[10px] text-emerald-400/80">浮動面・穴なし</span>
             </div>
           </div>
         </div>
 
-        {/* Right: Conversion Workstation & Methods */}
+        {/* Right: Controls & Input Methods */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Method 1: Local File Drag & Drop (Fastest & 100% Reliable) */}
+          {/* Target Height / Dimensions Adjuster */}
           <div className="bg-slate-900 rounded-3xl border border-slate-800 p-6 shadow-xl space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold">1</span>
-                <h3 className="font-bold text-white text-base">PC内のファイルをドロップ（最速・確実）</h3>
+                <Ruler className="w-5 h-5 text-cyan-400" />
+                <h3 className="font-bold text-white text-base">3Dプリント造形サイズ（高さ設定）</h3>
               </div>
-              <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 font-medium">推奨</span>
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 font-bold border border-cyan-500/20">
+                {targetHeightMm} mm
+              </span>
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              スマホやPCの「ダウンロード」にある <code className="text-emerald-300 font-mono">_meshopt.glb</code> を選ぶだけで、ブラウザ内で即座に穴なし水密STLに変換されます！
+              3Dプリンターで印刷したい高さを選んでください。アスペクト比を維持したまま正規ミリメートル単位でSTL出力されます。
             </p>
 
-            <div
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleDrop}
-              onClick={() => document.getElementById('standalone-file-input')?.click()}
-              className="border-2 border-dashed border-slate-700 hover:border-emerald-500/60 bg-slate-950/60 rounded-2xl p-6 text-center space-y-3 transition cursor-pointer group active:scale-[0.99]"
-            >
+            {/* Preset Buttons */}
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { label: '50mm', height: 50, note: 'ミニ' },
+                { label: '70mm', height: 70, note: '標準' },
+                { label: '100mm', height: 100, note: '中型' },
+                { label: '150mm', height: 150, note: '大型' },
+              ].map((p) => (
+                <button
+                  key={p.height}
+                  type="button"
+                  onClick={() => handleHeightChange(p.height)}
+                  className={`py-2 px-2 rounded-xl text-xs font-bold transition flex flex-col items-center cursor-pointer border ${
+                    targetHeightMm === p.height
+                      ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/20'
+                      : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:bg-slate-800'
+                  }`}
+                >
+                  <span>{p.label}</span>
+                  <span className={`text-[10px] font-normal ${targetHeightMm === p.height ? 'text-slate-900' : 'text-slate-500'}`}>
+                    {p.note}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* Custom Height Slider & Input */}
+            <div className="flex items-center gap-3 pt-1">
               <input
-                id="standalone-file-input"
-                type="file"
-                accept=".glb,.gltf,model/gltf-binary,model/gltf+json,application/octet-stream,*"
-                className="hidden"
-                onChange={handleFileChange}
+                type="range"
+                min="20"
+                max="220"
+                step="5"
+                value={targetHeightMm}
+                onChange={(e) => handleHeightChange(parseInt(e.target.value, 10))}
+                className="flex-1 accent-cyan-400 cursor-pointer"
               />
-              <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-800 group-hover:bg-emerald-500/20 flex items-center justify-center transition">
-                <Upload className="w-7 h-7 text-slate-400 group-hover:text-emerald-400 transition" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-white">📱 タップしてスマホのファイルから選択</p>
-                <p className="text-xs text-slate-400 mt-1">（PCはドラッグ＆ドロップ対応）</p>
-                <span className="inline-block mt-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-[11px] font-medium border border-emerald-500/20">
-                  Tripo3Dのダウンロード済みGLBを選ぶだけ！
-                </span>
+              <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-xl">
+                <input
+                  type="number"
+                  min="10"
+                  max="300"
+                  value={targetHeightMm}
+                  onChange={(e) => handleHeightChange(parseInt(e.target.value, 10) || 70)}
+                  className="w-12 bg-transparent text-right font-mono font-bold text-sm text-cyan-300 focus:outline-none"
+                />
+                <span className="text-xs text-slate-400">mm</span>
               </div>
             </div>
           </div>
 
-          {/* Method 2: URL Input */}
+          {/* Input Method 1: Dropzone */}
+          <div className="bg-slate-900 rounded-3xl border border-slate-800 p-6 shadow-xl space-y-4">
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold">1</span>
+              <h3 className="font-bold text-white text-base">ファイルを選択 / ドラッグ＆ドロップ</h3>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Tripo3Dからダウンロードした <code className="text-cyan-300">..._meshopt.glb</code> ファイルをそのままドロップしてください。
+            </p>
+
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+              onDragLeave={() => setIsDragOver(false)}
+              onDrop={handleDrop}
+              onClick={() => document.getElementById('tripo-file-input')?.click()}
+              className={`relative border-2 border-dashed rounded-2xl p-6 text-center transition cursor-pointer flex flex-col items-center justify-center gap-3 ${
+                isDragOver 
+                  ? 'border-emerald-400 bg-emerald-500/10 scale-[1.01]' 
+                  : 'border-slate-700 hover:border-emerald-500/50 bg-slate-950/60 hover:bg-slate-950'
+              }`}
+            >
+              <input
+                id="tripo-file-input"
+                type="file"
+                accept=".glb,.gltf"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                <Upload className="w-6 h-6" />
+              </div>
+
+              <div>
+                <p className="text-sm font-bold text-white">
+                  クリックしてファイルを選択（PCはドラッグ＆ドロップ）
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  対応形式: <span className="text-slate-300 font-mono">.glb / .gltf</span>（Meshopt暗号圧縮も自動解凍）
+                </p>
+              </div>
+
+              {isModelLoaded && modelMetrics && (
+                <div className="mt-1 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>読込完了: {modelMetrics.name}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Input Method 2: URL Input */}
           <div className="bg-slate-900 rounded-3xl border border-slate-800 p-6 shadow-xl space-y-4">
             <div className="flex items-center gap-2">
               <span className="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xs font-bold">2</span>
@@ -717,7 +819,7 @@ export const TripoStandaloneApp: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              DevTools（F12）で見つけた署名付きURLを貼り付けて変換できます。
+              Tripo3Dの画面からコピーしたGLBアドレスを貼り付けて直接変換できます。
             </p>
 
             <div className="space-y-3">
@@ -726,38 +828,27 @@ export const TripoStandaloneApp: React.FC = () => {
                 onChange={(e) => setInputUrl(e.target.value)}
                 placeholder="https://tripo-data.../..._meshopt.glb?..."
                 rows={3}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 font-mono focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition resize-none"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 font-mono focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition resize-none placeholder:text-slate-600"
               />
 
-              {/* Quick Preset Buttons */}
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] text-slate-400">URLクイック挿入:</span>
-                <button
-                  type="button"
-                  onClick={() => setInputUrl(defaultMonsterUrl)}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer"
-                >
-                  モンスター
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInputUrl('https://tripo-data.rg1.data.tripo3d.com/tripo-studio/20260713/bf6fc197-ea3f-4aed-bd34-073f446f57d0/tripo_base_model_bf6fc197-ea3f-4aed-bd34-073f446f57d0_meshopt.glb?Key-Pair-Id=K1676C64NMVM2J&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly90cmlwby1kYXRhLnJnMS5kYXRhLnRyaXBvM2QuY29tL3RyaXBvLXN0dWRpby8yMDI2MDcxMy9iZjZmYzE5Ny1lYTNmLTRhZWQtYmQzNC0wNzNmNDQ2ZjU3ZDAvdHJpcG9fYmFzZV9tb2RlbF9iZjZmYzE5Ny1lYTNmLTRhZWQtYmQzNC0wNzNmNDQ2ZjU3ZDBfbWVzaG9wdC5nbGIiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3OTA5ODU2MDB9fX1dfQ__&Signature=K-w-7b8JY91yXyGBY7sBEgG12i8Ry-itjXB6Gjn-PPlJeQDQmKMcwL~yry1gmkTA78FOvEQVa30QO3evhyVawv133z2PWBQf0TPxurUwcroUJ6CSFTyXUlTyKZRCSrSZYSlY3KmnSbz7GLjREfcoKwbv~Px6LWWlqGIpde7~E7tj0BlIwpNHYfsSfsuML~x8Rzx5vi5UWeke~GIIf6MZczb6XGvNH~0yZifKMuZyngSnTeel3CSoBZrYWzhv9nGW7ERd4FbCPPb9EBno401AQ5aLu3dMk4UEUf6YCnHhp6z7kDQez3-sLNvAr0-lsHcSfiATs~D7EjjhfVu5dImTzw__')}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer"
-                >
-                  新規ベースモデル (07/13)
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (inputUrl.trim()) {
+                    loadModelFromUrl(inputUrl.trim(), 'tripo_url_model');
+                  }
+                }}
+                disabled={isLoading || !inputUrl.trim()}
+                className="w-full py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-md transition disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                <span>URLから取得・水密STL変換</span>
+              </button>
+            </div>
 
-              <div className="flex gap-2">
-                <button
-                  onClick={handleConvertUrlSubmit}
-                  disabled={isLoading || !inputUrl.trim()}
-                  className="flex-1 py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-md transition disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                  <span>URLから取得・変換（CORSプロキシ対応）</span>
-                </button>
-              </div>
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 leading-relaxed">
+              💡 <strong className="text-slate-300">PCでの一番速い裏ワザ</strong>:  
+              コピーしたURLをChromeの新しいタブのアドレスバーに貼ってEnterを押すと、PCにGLBが直接ダウンロードされます。そのファイルを上の「① 点線枠」にドラッグ＆ドロップすると0秒で変換できます！
             </div>
 
             {errorMsg && (
@@ -766,50 +857,6 @@ export const TripoStandaloneApp: React.FC = () => {
                 <span>{errorMsg}</span>
               </div>
             )}
-          </div>
-
-          {/* Method 3: Mobile Bookmarklet Trick (Bypass Paywall on Android/iPhone) */}
-          <div className="bg-gradient-to-br from-indigo-950/40 to-slate-900 rounded-3xl border border-indigo-500/30 p-6 shadow-xl space-y-3">
-            <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">3</span>
-              <h3 className="font-bold text-white text-base">📱 スマホ裏ワザ：Tripo3Dの課金画面を回避</h3>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Tripo3Dの無料プランでは「輸出」ボタンを押すと有料アップグレード画面が出ますが、<strong>画面に表示されている3Dプレビューデータ（GLB）をスマホから直接吸い出す</strong>ことができます！
-            </p>
-
-            <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2 text-xs text-slate-300">
-              <p className="font-bold text-indigo-300">【使い方はかんたん2ステップ】</p>
-              <ol className="list-decimal list-inside space-y-1 text-slate-400 text-[11px]">
-                <li>下のボタンを押して「自動抽出コード」をコピーする</li>
-                <li>Chromeで適当なページをブックマーク保存し、URL欄に貼り付けて名前を「Tripo変換」にする</li>
-              </ol>
-              <p className="text-[11px] text-slate-400">
-                👉 あとはTripo3Dで3Dモデルを表示したまま、Chromeのアドレスバーに「Tripo」と入力してブックマークをタップするだけで、課金制限なしでこのアプリに転送されます！
-              </p>
-            </div>
-
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(bookmarkletCode);
-                setCopiedBookmarklet(true);
-                setTimeout(() => setCopiedBookmarklet(false), 3000);
-              }}
-              className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-98"
-            >
-              {copiedBookmarklet ? (
-                <>
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>コピー完了！ChromeのブックマークURLに貼ってください</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4" />
-                  <span>自動抽出コード（ブックマークレット）をコピー</span>
-                </>
-              )}
-            </button>
           </div>
 
           {/* Bambu Studio Slicing Cheat Sheet */}
@@ -867,19 +914,19 @@ export const TripoStandaloneApp: React.FC = () => {
 
             <div className="space-y-1.5">
               <h4 className="font-bold text-white flex items-center gap-1.5">
-                <span className="text-emerald-400">Q2.</span> 先ほどBambu Studioで「空のレイヤーがある」「浮動領域」と警告が出た理由は？
+                <span className="text-emerald-400">Q2.</span> Bambu Studioで「空のレイヤーがある」「浮動領域」と警告が出る原因は？
               </h4>
               <p className="text-slate-400 pl-6">
-                ファイル容量を下げるために単純な「三角形のスキップ間引き」を行うと、表面に無数の微小な穴（スイスチーズ現象）が空いてしまいます。3Dプリンターのスライサーは「中身が詰まった密閉立体（Manifold）」を前提に計算するため、穴から内部が露出して警告が出ました。今回の修正版では、トポロジー幾何学を維持したまま面を結合する「Meshoptimizer クアドラティック簡約」を施し、完全密閉ソリッドを実現しました。
+                ファイル容量を下げるために単純な「三角形のスキップ間引き」を行うと、表面に無数の微小な穴（スイスチーズ現象）が空いてしまいます。3Dプリンターのスライサーは「中身が詰まった密閉立体（Manifold）」を前提に計算するため、穴から内部が露出して警告が出ます。本アプリではトポロジー幾何学を維持したまま完全密閉ソリッドを実現します。
               </p>
             </div>
 
             <div className="space-y-1.5">
               <h4 className="font-bold text-white flex items-center gap-1.5">
-                <span className="text-purple-400">Q3.</span> Bambu Lab A1 miniで綺麗に印刷するコツは？
+                <span className="text-purple-400">Q3.</span> なぜTripoのモデルをそのままSTL化すると1mmサイズになってしまうのか？
               </h4>
               <p className="text-slate-400 pl-6">
-                このモンスターのように大きく開いた口や顎の下、両耳の突起がある形状では、スライサーの「サポート」タブで <strong className="text-white">タイプ: ツリー (Tree Auto)</strong> を選択してください。通常の格子状サポートよりも剥がしやすく、造形後の表面が驚くほど滑らかに仕上がります。
+                GLTF/GLB規格の単位は「メートル（m）」ですが、スライサー（STL）は単位を「ミリメートル（mm）」として読み込みます。本アプリでは自動的に「高さ70mm」などの実用卓上フィギュア寸法へ正規ミリメートル変換を施して出力するため、縮小バグが起きません。
               </p>
             </div>
           </div>
