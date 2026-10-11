@@ -16,10 +16,12 @@ export const Navbar: React.FC = () => {
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 via-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 text-slate-950 font-black text-lg">
               <Printer className="w-5 h-5 text-slate-950" />
             </div>
-            <div>
               <div className="flex items-center gap-2">
                 <span className="font-extrabold text-base sm:text-lg tracking-tight text-white">
-                  Tripo3D → 高精度STL変換スタジオ
+                  3Dプリント高精度STL変換スタジオ
+                </span>
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-mono font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-sm">
+                  v2.3.0
                 </span>
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                   <ShieldCheck className="w-3 h-3 mr-1" />
@@ -27,9 +29,8 @@ export const Navbar: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Meshopt WebAssembly 解凍 & Bambu Lab / OrcaSlicer / Cura 直行出力
+                Tripo3D • Meshy • Hi3D 対応 & Bambu Lab / OrcaSlicer / Cura 直行出力
               </p>
-            </div>
           </div>
 
           {/* Status Badges */}

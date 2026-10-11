@@ -74,6 +74,7 @@ export const TripoStandaloneApp: React.FC = () => {
   const rawParsedSceneRef = useRef<THREE.Group | null>(null);
   const rawModelNameRef = useRef<string>('tripo_model');
   const originalMaterialsMap = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
+  const rawGlbBlobRef = useRef<Blob | null>(null);
 
   // Setup Three.js scene
   useEffect(() => {
@@ -315,6 +316,11 @@ export const TripoStandaloneApp: React.FC = () => {
     setErrorMsg(null);
 
     try {
+      // Store raw buffer as backup GLB blob
+      const rawBlob = new Blob([buffer], { type: 'model/gltf-binary' });
+      rawGlbBlobRef.current = rawBlob;
+      setGeneratedGlbBlob(rawBlob);
+
       await MeshoptDecoder.ready;
       setProgressText('3Dジオメトリ & トポロジー解析中...');
 
@@ -361,7 +367,7 @@ export const TripoStandaloneApp: React.FC = () => {
   // Load from URL
   const loadModelFromUrl = async (url: string, name: string) => {
     setIsLoading(true);
-    setProgressText('Tripo3Dからモデルデータを受信中...');
+    setProgressText('3Dモデルデータを取得中...');
     setErrorMsg(null);
 
     try {
@@ -370,16 +376,17 @@ export const TripoStandaloneApp: React.FC = () => {
         fetchUrl = `/api/proxy-model?url=${encodeURIComponent(url)}`;
       }
 
-      let res: Response;
-      try {
-        res = await fetch(fetchUrl);
-      } catch (e) {
-        // Fallback to direct fetch
-        res = await fetch(url);
-      }
+      let res = await fetch(fetchUrl);
 
       if (!res.ok) {
-        throw new Error(`ダウンロードに失敗しました (HTTP ${res.status})。URLの有効期限が切れている可能性があります。`);
+        let errMsg = '';
+        try {
+          const errData = await res.json();
+          errMsg = errData.error;
+        } catch (_) {
+          errMsg = `ダウンロードに失敗しました (HTTP ${res.status})`;
+        }
+        throw new Error(errMsg);
       }
 
       const buf = await res.arrayBuffer();
@@ -389,6 +396,7 @@ export const TripoStandaloneApp: React.FC = () => {
       setIsLoading(false);
       setProgressText('');
       setErrorMsg(
+        err.message ||
         '通信がブロックされたか、URLの有効期限が切れています。PCでChromeのアドレスバーに貼って保存したGLBを、上の点線枠にドラッグ＆ドロップすると0秒で確実に変換できます！'
       );
     }
@@ -442,8 +450,9 @@ export const TripoStandaloneApp: React.FC = () => {
 
   // Download GLB
   const handleDownloadGlb = () => {
-    if (!generatedGlbBlob) return;
-    const url = URL.createObjectURL(generatedGlbBlob);
+    const blob = generatedGlbBlob || rawGlbBlobRef.current;
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${modelMetrics?.name || 'model'}_standard.glb`;
@@ -474,7 +483,7 @@ export const TripoStandaloneApp: React.FC = () => {
             <div className="flex flex-wrap items-center gap-2">
               <span className="px-3 py-1 rounded-full text-xs font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5 text-cyan-400" />
-                Tripo3D 専用コンバーター
+                Tripo3D • Meshy • Hi3D 対応
               </span>
               <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
@@ -485,12 +494,17 @@ export const TripoStandaloneApp: React.FC = () => {
               </span>
             </div>
 
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-white tracking-tight">
-              Tripo3D → 3Dプリント用 高精度STL / GLB変換機
-            </h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-white tracking-tight">
+                AI 3Dモデル → 高精度STL / GLB変換スタジオ
+              </h1>
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-mono font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm">
+                v2.3.0
+              </span>
+            </div>
 
             <p className="text-sm sm:text-base text-slate-300 max-w-3xl leading-relaxed">
-              Tripo3Dの特殊な「meshopt暗号圧縮」をブラウザ内WebAssemblyで即座に解凍。スライサーで空洞・浮動領域警告が起きない<strong className="text-emerald-300 font-semibold">「穴のない完全ソリッドな3Dプリント用バイナリSTL」</strong>を自動生成します。
+              Tripo3D、Meshy、Hi3D (hi3d.ai) のURLを貼るだけで3Dデータを自動抽出＆解凍。スライサーで空洞・浮動領域警告が起きない<strong className="text-emerald-300 font-semibold">「穴のない完全ソリッドな3Dプリント用バイナリSTL」</strong>と<strong className="text-cyan-300 font-semibold">「テクスチャ付き標準GLB」</strong>を自動生成します。
             </p>
           </div>
 
@@ -522,19 +536,26 @@ export const TripoStandaloneApp: React.FC = () => {
 
             <button
               onClick={handleDownloadGlb}
-              disabled={!isModelLoaded || !generatedGlbBlob}
-              className={`py-3 px-5 rounded-2xl font-bold text-xs shadow-md transition flex items-center justify-center gap-2 ${
-                isModelLoaded && generatedGlbBlob
-                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer'
-                  : 'bg-slate-900/60 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50'
+              disabled={!isModelLoaded || (!generatedGlbBlob && !rawGlbBlobRef.current)}
+              className={`py-3.5 px-6 rounded-2xl font-black text-sm shadow-xl transition transform active:scale-95 flex items-center justify-center gap-2.5 ${
+                isModelLoaded && (generatedGlbBlob || rawGlbBlobRef.current)
+                  ? 'bg-gradient-to-r from-cyan-600 via-sky-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-500/25 cursor-pointer'
+                  : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed opacity-60'
               }`}
             >
-              <Box className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span>
-                {isModelLoaded && modelMetrics
-                  ? `標準非圧縮GLB (${modelMetrics.glbSizeMb} MB)`
-                  : '標準非圧縮GLB'}
-              </span>
+              <Box className="w-5 h-5 shrink-0" />
+              <div className="text-left">
+                <div className="leading-tight">
+                  {isModelLoaded && modelMetrics
+                    ? `標準GLBを保存 (${modelMetrics.glbSizeMb} MB)`
+                    : '標準GLBを保存'}
+                </div>
+                {isModelLoaded && modelMetrics && (
+                  <div className="text-[10px] opacity-80 font-normal">
+                    テクスチャ付き • 汎用3D形式
+                  </div>
+                )}
+              </div>
             </button>
           </div>
         </div>
@@ -688,6 +709,39 @@ export const TripoStandaloneApp: React.FC = () => {
               <span className="text-[10px] text-emerald-400/80">浮動面・穴なし</span>
             </div>
           </div>
+
+          {/* Quick Download Action Banner (Both STL & GLB) */}
+          {isModelLoaded && (
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 p-4 rounded-2xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xl">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-white">変換完了！ファイルを保存できます</p>
+                  <p className="text-[11px] text-slate-400">STL（3Dプリント用）と GLB（テクスチャ付き標準3D）</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                <button
+                  onClick={handleDownloadStl}
+                  className="flex-1 sm:flex-none py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>水密STL保存 ({modelMetrics?.stlSizeMb}MB)</span>
+                </button>
+
+                <button
+                  onClick={handleDownloadGlb}
+                  className="flex-1 sm:flex-none py-2.5 px-4 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Box className="w-4 h-4" />
+                  <span>標準GLB保存 ({modelMetrics?.glbSizeMb}MB)</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right: Controls & Input Methods */}
@@ -815,18 +869,18 @@ export const TripoStandaloneApp: React.FC = () => {
           <div className="bg-slate-900 rounded-3xl border border-slate-800 p-6 shadow-xl space-y-4">
             <div className="flex items-center gap-2">
               <span className="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xs font-bold">2</span>
-              <h3 className="font-bold text-white text-base">Tripo3DのURLから取得</h3>
+              <h3 className="font-bold text-white text-base">モデルURLを貼り付けて直接変換</h3>
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              Tripo3Dの画面からコピーしたGLBアドレスを貼り付けて直接変換できます。
+              Tripo3D、Meshy、Hi3D (hi3d.ai) のWebページURLや共有リンクをそのまま貼り付けて直接変換できます。サーバー側で3Dモデルデータを自動検出し、高精度に水密STL化します。
             </p>
 
             <div className="space-y-3">
               <textarea
                 value={inputUrl}
                 onChange={(e) => setInputUrl(e.target.value)}
-                placeholder="https://tripo-data.../..._meshopt.glb?..."
+                placeholder="https://www.hi3d.ai/ja/3d-model/... や Tripo3D、MeshyなどのモデルURL"
                 rows={3}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 font-mono focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition resize-none placeholder:text-slate-600"
               />
@@ -835,28 +889,97 @@ export const TripoStandaloneApp: React.FC = () => {
                 type="button"
                 onClick={() => {
                   if (inputUrl.trim()) {
-                    loadModelFromUrl(inputUrl.trim(), 'tripo_url_model');
+                    loadModelFromUrl(inputUrl.trim(), 'model_auto');
                   }
                 }}
                 disabled={isLoading || !inputUrl.trim()}
                 className="w-full py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-md transition disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                <span>URLから取得・水密STL変換</span>
+                <span>URLから自動抽出・水密STL変換</span>
               </button>
-            </div>
-
-            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 leading-relaxed">
-              💡 <strong className="text-slate-300">PCでの一番速い裏ワザ</strong>:  
-              コピーしたURLをChromeの新しいタブのアドレスバーに貼ってEnterを押すと、PCにGLBが直接ダウンロードされます。そのファイルを上の「① 点線枠」にドラッグ＆ドロップすると0秒で変換できます！
             </div>
 
             {errorMsg && (
               <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
-                <span>{errorMsg}</span>
+                <span className="leading-relaxed">{errorMsg}</span>
               </div>
             )}
+          </div>
+
+          {/* Input Method 3: 1-Click Browser Bookmarklet */}
+          <div className="bg-gradient-to-br from-indigo-950/40 to-slate-900 rounded-3xl border border-indigo-500/30 p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">3</span>
+                <h3 className="font-bold text-white text-base">⭐ 1クリック抽出ブックマーク（PC・スマホ両対応）</h3>
+              </div>
+              <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-bold border border-indigo-500/30">
+                スマホOK 📱
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Hi3DやMeshy、Tripo3Dの画面を開いたまま、<strong>ブラウザのお気に入り（ブックマーク）を1回押すだけ</strong>で、表示中の3Dモデルを自動検出してこのアプリに転送・変換します（F12開発者ツール不要！）。
+            </p>
+
+            {/* PC Quick Drag */}
+            <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-indigo-300">💻 PC（Chrome / Edge / Firefox）の方:</span>
+                <span className="text-[10px] text-slate-400">バーにドラッグするだけ</span>
+              </div>
+              <a
+                href={`javascript:(function(){try{var entries=performance.getEntriesByType('resource');var foundUrl='';for(var i=entries.length-1;i>=0;i--){var n=entries[i].name;if(n.indexOf('_meshopt.glb')!==-1||n.indexOf('tripo-data')!==-1||n.indexOf('.glb')!==-1||n.indexOf('assets.meshy.ai')!==-1||n.indexOf('.meshy')!==-1||n.indexOf('zaohaowu')!==-1||n.indexOf('hi3d')!==-1){foundUrl=n;break;}}if(!foundUrl){var sorted=entries.slice().sort(function(a,b){return((b.transferSize||b.decodedBodySize)||0)-((a.transferSize||a.decodedBodySize)||0);});if(sorted[0]&&((sorted[0].transferSize||sorted[0].decodedBodySize)||0)>300000){foundUrl=sorted[0].name;}}if(foundUrl){location.href='${window.location.origin}/?url='+encodeURIComponent(foundUrl);}else{alert('3Dモデルデータが見つかりませんでした。画面上のモデルを少し回転させてから再度お試しください。');}}catch(e){alert('エラー:'+e.message);}})();`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  alert('このボタンをブラウザの「お気に入りバー（ブックマークバー）」にマウスでドラッグ＆ドロップしてください！');
+                }}
+                title="ブラウザのお気に入りバーにドラッグ＆ドロップしてください"
+                className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-xs text-center shadow-md transition cursor-grab active:cursor-grabbing border border-indigo-400/30 flex items-center justify-center gap-2"
+              >
+                <span>⭐ このボタンをお気に入りバーにドラッグ</span>
+              </a>
+            </div>
+
+            {/* Smartphone Setup Guide */}
+            <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-emerald-400">📱 スマホ（iPhone / Android）の方:</span>
+                <span className="text-[10px] text-slate-400">設定は最初の1回だけ（30秒）</span>
+              </div>
+
+              <ol className="list-decimal list-inside space-y-2 text-slate-300 text-[11px] leading-relaxed">
+                <li>
+                  下のボタンを押して「<strong>抽出コード</strong>」をコピーします。
+                </li>
+                <li>
+                  このページをブラウザでブックマーク保存し、名前を <strong className="text-white">「3D」</strong> にします。
+                </li>
+                <li>
+                  保存したブックマークの「編集」を開き、URL欄を全消去して、コピーしたコードを貼り付けて保存！
+                </li>
+              </ol>
+
+              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300">
+                👉 <strong>使い方</strong>:  
+                Hi3DやMeshy、Tripoで3Dモデルを表示中に、スマホのアドレスバーに <strong className="text-white">「3D」</strong> と入力して候補に出る⭐ブックマークをタップするだけ！
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const targetOrigin = window.location.origin;
+                  const code = `javascript:(function(){try{var entries=performance.getEntriesByType('resource');var foundUrl='';for(var i=entries.length-1;i>=0;i--){var n=entries[i].name;if(n.indexOf('_meshopt.glb')!==-1||n.indexOf('tripo-data')!==-1||n.indexOf('.glb')!==-1||n.indexOf('assets.meshy.ai')!==-1||n.indexOf('.meshy')!==-1||n.indexOf('zaohaowu')!==-1||n.indexOf('hi3d')!==-1){foundUrl=n;break;}}if(!foundUrl){var sorted=entries.slice().sort(function(a,b){return((b.transferSize||b.decodedBodySize)||0)-((a.transferSize||a.decodedBodySize)||0);});if(sorted[0]&&((sorted[0].transferSize||sorted[0].decodedBodySize)||0)>300000){foundUrl=sorted[0].name;}}if(foundUrl){location.href='${targetOrigin}/?url='+encodeURIComponent(foundUrl);}else{alert('3Dモデルデータが見つかりませんでした。画面上のモデルを指で少し回転させてから再度お試しください。');}}catch(e){alert('エラー:'+e.message);}})();`;
+                  navigator.clipboard.writeText(code);
+                  alert('スマホ用抽出コードをコピーしました！ブックマークのURL欄に貼り付けて保存してください。');
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold text-xs border border-emerald-500/30 transition flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-98"
+              >
+                <span>📋 スマホ用抽出コードをコピー</span>
+              </button>
+            </div>
           </div>
 
           {/* Bambu Studio Slicing Cheat Sheet */}
