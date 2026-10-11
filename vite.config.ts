@@ -50,6 +50,16 @@ const tripoProxyPlugin = (): Plugin => ({
 
         const contentType = response.headers.get('content-type') || '';
 
+        // Check if user accidentally pasted a CSS or JS asset
+        if (contentType.includes('text/css') || targetUrl.match(/\.(css|js)(\?|$)/i)) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ 
+            error: '貼り付けられたURLは3Dモデルではなく『CSS（ウェブサイトのデザイン装飾ファイル）』です！ブラウザのアドレスバーにあるWebページのURL（https://www.hi3d.ai/...）をそのまま貼り付けてください。' 
+          }));
+          return;
+        }
+
         // Check if user accidentally pasted a Tripo WebP / thumbnail image
         if (contentType.includes('image/') || targetUrl.match(/\.(webp|png|jpg|jpeg)(\?|$)/i)) {
           // Attempt to auto-derive the actual Tripo GLB URL from the studio task UUID
