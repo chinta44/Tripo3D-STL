@@ -379,12 +379,30 @@ export const TripoStandaloneApp: React.FC = () => {
       let res = await fetch(fetchUrl);
 
       if (!res.ok) {
+        // Fallback: If proxy returned 404 (e.g. running on Vercel without serverless route) and target is direct model URL, try client-side direct fetch
+        if (res.status === 404 && url.match(/\.(glb|gltf)(\?|$)/i)) {
+          try {
+            const directResp = await fetch(url);
+            if (directResp.ok) {
+              const buf = await directResp.arrayBuffer();
+              await processGlbFileBuffer(buf, name);
+              return;
+            }
+          } catch (_) {
+            // direct fetch failed
+          }
+        }
+
         let errMsg = '';
         try {
           const errData = await res.json();
           errMsg = errData.error;
         } catch (_) {
-          errMsg = `ダウンロードに失敗しました (HTTP ${res.status})`;
+          if (res.status === 404) {
+            errMsg = 'ダウンロードに失敗しました (HTTP 404)。Vercel等の外部ホスティング環境では /api/proxy-model のサーバー機能が必要です。GitHubから最新コードを再デプロイしていただくか、上の点線枠にGLBファイルを直接ドロップしてください。';
+          } else {
+            errMsg = `ダウンロードに失敗しました (HTTP ${res.status})`;
+          }
         }
         throw new Error(errMsg);
       }
