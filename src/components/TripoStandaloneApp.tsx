@@ -24,7 +24,10 @@ import {
   HelpCircle,
   FileCheck2,
   Scale,
-  Ruler
+  Ruler,
+  Eye,
+  Sparkles,
+  Smartphone
 } from 'lucide-react';
 
 interface ModelMetrics {
@@ -40,7 +43,12 @@ interface ModelMetrics {
   estimatedWeightGrams: number;
 }
 
-export const TripoStandaloneApp: React.FC = () => {
+interface TripoStandaloneAppProps {
+  onSwitchToMerge?: () => void;
+  onSwitchToMotion?: () => void;
+}
+
+export const TripoStandaloneApp: React.FC<TripoStandaloneAppProps> = ({ onSwitchToMerge, onSwitchToMotion }) => {
   // Input URL state
   const [inputUrl, setInputUrl] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -54,6 +62,12 @@ export const TripoStandaloneApp: React.FC = () => {
 
   // Target print height (mm)
   const [targetHeightMm, setTargetHeightMm] = useState<number>(70);
+
+  // AR display height (cm) for Chrome Scene Viewer (default 20cm)
+  const [arHeightCm, setArHeightCm] = useState<number>(20);
+
+  // Sync AR height with 3D print height (mm / 10 = cm)
+  const [isArSyncWithPrint, setIsArSyncWithPrint] = useState<boolean>(false);
 
   // Generated in-memory Blobs for instant 0-second downloads
   const [generatedStlBlob, setGeneratedStlBlob] = useState<Blob | null>(null);
@@ -200,8 +214,8 @@ export const TripoStandaloneApp: React.FC = () => {
     });
   }, [renderMode, filamentColor]);
 
-  // Re-scale & re-export model when targetHeightMm changes
-  const applyScalingAndExport = useCallback((heightMm: number) => {
+  // Re-scale & re-export model when targetHeightMm or arHeightCm changes
+  const applyScalingAndExport = useCallback((heightMm: number, targetArCm: number = arHeightCm) => {
     const rawScene = rawParsedSceneRef.current;
     const scene = sceneRef.current;
     if (!rawScene || !scene) return;
@@ -248,7 +262,7 @@ export const TripoStandaloneApp: React.FC = () => {
       controlsRef.current.target.set(0, heightMm * 0.45, 0);
     }
 
-    // Export scaled binary STL
+    // Export scaled binary STL for 3D printer (in millimeters)
     let stlSize = 0;
     try {
       const exporter = new STLExporter();
@@ -260,12 +274,28 @@ export const TripoStandaloneApp: React.FC = () => {
       console.warn('STL export failed', e);
     }
 
-    // Export standard decompressed GLB
+    // Export standard decompressed GLB scaled in METERS for AR & glTF specification (1 unit = 1 meter)
+    // targetArCm is in centimeters (e.g. 10cm, 20cm, 50cm, 160cm)
+    // 160cm -> 1.60 meters height in glTF coordinates!
     let glbSize = 0;
     try {
+      const targetArM = (targetArCm || 20) / 100;
+      const arScale = targetArM / curHeight;
+
+      // Clean clone from rawScene
+      const arClone = rawScene.clone(true);
+      arClone.scale.set(arScale, arScale, arScale);
+      // Center horizontally on X/Z and place bottom exactly at Y = 0 (ground level)
+      arClone.position.set(
+        -center.x * arScale,
+        -bbox.min.y * arScale,
+        -center.z * arScale
+      );
+      arClone.updateMatrixWorld(true);
+
       const gltfExporter = new GLTFExporter();
       gltfExporter.parse(
-        cloned,
+        arClone,
         (result) => {
           if (result instanceof ArrayBuffer) {
             const blob = new Blob([result], { type: 'model/gltf-binary' });
@@ -298,14 +328,39 @@ export const TripoStandaloneApp: React.FC = () => {
       estimatedWeightGrams: estWeight,
     });
     setIsModelLoaded(true);
-  }, []);
+  }, [arHeightCm]);
 
-  // Handle Height change from UI
+  // Handle Height change from UI (3D printer mm)
   const handleHeightChange = (newHeight: number) => {
     if (newHeight <= 0) return;
     setTargetHeightMm(newHeight);
+    const effectiveArCm = isArSyncWithPrint ? parseFloat((newHeight / 10).toFixed(1)) : arHeightCm;
+    if (isArSyncWithPrint) {
+      setArHeightCm(effectiveArCm);
+    }
     if (rawParsedSceneRef.current) {
-      applyScalingAndExport(newHeight);
+      applyScalingAndExport(newHeight, effectiveArCm);
+    }
+  };
+
+  // Handle AR Height change from UI (AR display cm)
+  const handleArHeightChange = (newCm: number) => {
+    if (newCm <= 0) return;
+    setArHeightCm(newCm);
+    if (rawParsedSceneRef.current) {
+      applyScalingAndExport(targetHeightMm, newCm);
+    }
+  };
+
+  // Toggle AR sync with 3D print height
+  const handleToggleArSync = (sync: boolean) => {
+    setIsArSyncWithPrint(sync);
+    if (sync) {
+      const syncCm = parseFloat((targetHeightMm / 10).toFixed(1));
+      setArHeightCm(syncCm);
+      if (rawParsedSceneRef.current) {
+        applyScalingAndExport(targetHeightMm, syncCm);
+      }
     }
   };
 
@@ -344,7 +399,7 @@ export const TripoStandaloneApp: React.FC = () => {
           });
 
           setProgressText('水密ソリッドSTL生成中...');
-          applyScalingAndExport(targetHeightMm);
+          applyScalingAndExport(targetHeightMm, arHeightCm);
 
           setIsLoading(false);
           setProgressText('');
@@ -473,7 +528,7 @@ export const TripoStandaloneApp: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${modelMetrics?.name || 'model'}_standard.glb`;
+    a.download = `${modelMetrics?.name || 'model'}_AR_${arHeightCm}cm.glb`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -565,12 +620,12 @@ export const TripoStandaloneApp: React.FC = () => {
               <div className="text-left">
                 <div className="leading-tight">
                   {isModelLoaded && modelMetrics
-                    ? `標準GLBを保存 (${modelMetrics.glbSizeMb} MB)`
-                    : '標準GLBを保存'}
+                    ? `AR実寸GLBを保存 (${modelMetrics.glbSizeMb} MB)`
+                    : 'AR実寸GLBを保存'}
                 </div>
                 {isModelLoaded && modelMetrics && (
                   <div className="text-[10px] opacity-80 font-normal">
-                    テクスチャ付き • 汎用3D形式
+                    実寸 {arHeightCm}cm • Chrome AR等身大・卓上対応
                   </div>
                 )}
               </div>
@@ -578,6 +633,66 @@ export const TripoStandaloneApp: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* Multi-GLB Merge Promotion Banner */}
+      {onSwitchToMerge && (
+        <div className="bg-gradient-to-r from-purple-950/40 via-slate-900 to-indigo-950/40 p-4 rounded-2xl border border-purple-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-300 shrink-0">
+              <Layers className="w-5 h-5 text-purple-400" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white flex items-center gap-2">
+                <span>複数のGLBファイルを1つに合体・結合したいですか？</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-purple-500/30 text-purple-200 border border-purple-400/40 font-mono">
+                  新機能
+                </span>
+              </p>
+              <p className="text-[11px] text-slate-400">
+                キャラクター＋武器、複数フィギュアの並び、台座＋モデルなどを1つのGLBにまとめ、Chrome ARで同時に出現させることができます。
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={onSwitchToMerge}
+            className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-md"
+          >
+            <span>複数GLB結合スタジオを開く</span>
+            <span>→</span>
+          </button>
+        </div>
+      )}
+
+      {/* Cat / Animal Motion AR Studio Promotion Banner */}
+      {onSwitchToMotion && (
+        <div className="bg-gradient-to-r from-pink-950/40 via-slate-900 to-indigo-950/40 p-4 rounded-2xl border border-pink-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-pink-500/10 border border-pink-500/20 flex items-center justify-center text-pink-300 shrink-0 text-xl">
+              🐱
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white flex items-center gap-2">
+                <span>猫や動物のGLBに「呼吸」「見回し」「歩行」の動きをつけてAR表示したいですか？</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-pink-500/30 text-pink-200 border border-pink-400/40 font-mono">
+                  NEW
+                </span>
+              </p>
+              <p className="text-[11px] text-slate-400">
+                静止した猫の3Dモデルをアップロードするだけで、生命感あふれるループアニメーションを自動付与！Chrome ARで開いた瞬間に部屋の中でずっと動き続けるGLBを出力できます。
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={onSwitchToMotion}
+            className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-pink-600 via-rose-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-md shadow-pink-500/20"
+          >
+            <span>🐱 猫モーションスタジオを開く</span>
+            <span>→</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Studio Area */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -755,9 +870,22 @@ export const TripoStandaloneApp: React.FC = () => {
                   className="flex-1 sm:flex-none py-2.5 px-4 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Box className="w-4 h-4" />
-                  <span>標準GLB保存 ({modelMetrics?.glbSizeMb}MB)</span>
+                  <span>AR実寸GLB保存 ({arHeightCm}cm • {modelMetrics?.glbSizeMb}MB)</span>
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* AR Scale Explanation Note */}
+          {isModelLoaded && (
+            <div className="bg-gradient-to-r from-indigo-950/40 via-slate-900 to-cyan-950/30 p-4 rounded-2xl border border-indigo-500/30 text-xs text-slate-300 space-y-2">
+              <div className="flex items-center gap-2 text-indigo-300 font-bold">
+                <span>📱 なぜChromeのARでモデルが「巨大すぎる」「小さすぎる」のか？（解決済み！）</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                glTF/GLBの国際規格では<strong className="text-white">「1単位＝1メートル」</strong>と定められています。AIモデルが70mmを「70単位」で出力すると、Chrome ARは<strong className="text-amber-300">「70メートルの超高層ビル」</strong>として認識し、ピンチで最小に縮小しても7メートルで部屋を突き破ってしまいます。逆に極小単位のモデルはゴミ粒のように見えなくなります。<br />
+                当アプリの「AR実寸GLB」は指定したサイズ（現在: <strong className="text-emerald-300 font-bold">{arHeightCm}cm</strong>）に正確にメートル換算（{(arHeightCm / 100).toFixed(2)}m）してGLB化するため、スマホのChrome ARで開くだけで<strong className="text-emerald-300 font-bold">机や床の上に指定した実寸通りでぴったり出現</strong>します！
+              </p>
             </div>
           )}
         </div>
@@ -827,6 +955,130 @@ export const TripoStandaloneApp: React.FC = () => {
                   className="w-12 bg-transparent text-right font-mono font-bold text-sm text-cyan-300 focus:outline-none"
                 />
                 <span className="text-xs text-slate-400">mm</span>
+              </div>
+            </div>
+          </div>
+
+          {/* AR Real-World Height Adjuster (Chrome AR / Mobile AR) */}
+          <div className="bg-gradient-to-br from-indigo-950/40 via-slate-900 to-cyan-950/30 rounded-3xl border border-indigo-500/40 p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-indigo-400" />
+                <h3 className="font-bold text-white text-base">Chrome AR 実寸サイズ設定</h3>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-bold border border-indigo-500/30">
+                  実寸 {arHeightCm} cm ({(arHeightCm / 100).toFixed(2)}m)
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Chrome AR（Scene Viewer）で表示した時の<strong className="text-white">現実世界での実寸の高さ</strong>を設定します。glTF国際規格（1単位=1メートル）に自動換算してGLB出力するため、<strong className="text-emerald-300">「縮小しても巨大すぎる」「小さすぎて見えない」問題を100%解消</strong>します！
+            </p>
+
+            {/* Sync Toggle */}
+            <div className="flex items-center justify-between bg-slate-950/90 p-2 rounded-2xl border border-slate-800 text-xs">
+              <span className="text-slate-400 pl-2 text-[11px]">サイズ設定:</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleToggleArSync(true)}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    isArSyncWithPrint
+                      ? 'bg-cyan-500 text-slate-950 shadow-sm font-black'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  3Dプリントと連動 ({(targetHeightMm / 10).toFixed(1)}cm)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleArSync(false)}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    !isArSyncWithPrint
+                      ? 'bg-indigo-600 text-white shadow-sm font-black'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  AR専用サイズ指定
+                </button>
+              </div>
+            </div>
+
+            {/* Presets */}
+            <div className="grid grid-cols-5 gap-1.5">
+              {[
+                { label: '10cm', cm: 10, note: '卓上ミニ' },
+                { label: '20cm', cm: 20, note: 'フィギュア' },
+                { label: '50cm', cm: 50, note: '中型・棚' },
+                { label: '160cm', cm: 160, note: '等身大人物' },
+                { label: '200cm', cm: 200, note: '大型原寸' },
+              ].map((p) => (
+                <button
+                  key={p.cm}
+                  type="button"
+                  onClick={() => {
+                    if (isArSyncWithPrint) setIsArSyncWithPrint(false);
+                    handleArHeightChange(p.cm);
+                  }}
+                  className={`py-2 px-1 rounded-xl text-xs font-bold transition flex flex-col items-center cursor-pointer border ${
+                    arHeightCm === p.cm
+                      ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-500/20'
+                      : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:bg-slate-800'
+                  }`}
+                >
+                  <span className="text-[11px] font-mono">{p.label}</span>
+                  <span className={`text-[9px] font-normal ${arHeightCm === p.cm ? 'text-indigo-200' : 'text-slate-500'}`}>
+                    {p.note}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* AR Height Slider & Direct cm Input */}
+            <div className="flex items-center gap-3 pt-1">
+              <input
+                type="range"
+                min="5"
+                max="250"
+                step="1"
+                value={arHeightCm}
+                onChange={(e) => {
+                  if (isArSyncWithPrint) setIsArSyncWithPrint(false);
+                  handleArHeightChange(parseFloat(e.target.value));
+                }}
+                className="flex-1 accent-indigo-400 cursor-pointer"
+              />
+              <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-xl">
+                <input
+                  type="number"
+                  min="1"
+                  max="500"
+                  value={arHeightCm}
+                  onChange={(e) => {
+                    if (isArSyncWithPrint) setIsArSyncWithPrint(false);
+                    handleArHeightChange(parseFloat(e.target.value) || 20);
+                  }}
+                  className="w-14 bg-transparent text-right font-mono font-bold text-sm text-indigo-300 focus:outline-none"
+                />
+                <span className="text-xs text-slate-400">cm</span>
+              </div>
+            </div>
+
+            {/* Real-time AR Footprint Info */}
+            <div className="bg-slate-950/70 p-3 rounded-2xl border border-slate-800 text-[11px] space-y-1">
+              <div className="flex items-center justify-between text-slate-300">
+                <span className="text-slate-400">現実空間での出現サイズ:</span>
+                <span className="font-mono font-bold text-indigo-300">
+                  {modelMetrics 
+                    ? `幅 ${(arHeightCm * (modelMetrics.widthMm / (modelMetrics.heightMm || 1))).toFixed(1)}cm × 奥行 ${(arHeightCm * (modelMetrics.depthMm / (modelMetrics.heightMm || 1))).toFixed(1)}cm × 高さ ${arHeightCm}cm`
+                    : `高さ ${arHeightCm}cm`}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>glTF国際規格 1単位=1メートル準拠 • 接地面Y=0自動配置</span>
               </div>
             </div>
           </div>
@@ -1068,6 +1320,17 @@ export const TripoStandaloneApp: React.FC = () => {
               </h4>
               <p className="text-slate-400 pl-6">
                 GLTF/GLB規格の単位は「メートル（m）」ですが、スライサー（STL）は単位を「ミリメートル（mm）」として読み込みます。本アプリでは自動的に「高さ70mm」などの実用卓上フィギュア寸法へ正規ミリメートル変換を施して出力するため、縮小バグが起きません。
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <h4 className="font-bold text-white flex items-center gap-1.5">
+                <span className="text-indigo-400">Q4.</span> なぜChromeのARでモデルを開くと「最小に縮小しても大きすぎる」または「小さすぎる」のか？
+              </h4>
+              <p className="text-slate-400 pl-6">
+                <strong>原因1（単位規格の不一致）:</strong> glTF/GLB規格の公式定義は「1単位＝1メートル」です。しかし多くのAIツールやCADは数値をミリメートル（例: 70）や独自の単位で書き出すため、Google Scene Viewer（Chrome AR）は「高さ70メートル（ビル20階分）」と誤認してしまいます。<br />
+                <strong>原因2（ピンチ操作の限界）:</strong> Chrome ARのピンチズーム倍率には制限（最小0.1倍〜最大10倍）があるため、70メートルのモデルは最小に縮小しても7メートルあり部屋に収まりません。逆に0.01単位のモデルは最大にしても虫メガネで見ないと見えないほど小さくなります。<br />
+                <strong>解決策:</strong> 当ツールの「Chrome AR 実寸サイズ設定」で「20cm（卓上）」や「160cm（等身大）」などを指定して「AR実寸GLB保存」してください。座標系と接地面（Y=0）が正確なメートル単位に再計算され、Chrome ARで開いた瞬間にピンチ操作不要で100%指定した実寸通りの大きさで出現します。
               </p>
             </div>
           </div>
